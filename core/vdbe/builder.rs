@@ -272,6 +272,9 @@ pub struct ProgramBuilder {
     capture_data_changes_info: Option<CaptureDataChangesInfo>,
     /// Whether the main database uses MVCC journal mode, set once at translation time from the connection.
     mvcc_enabled: bool,
+    /// Whether a READ ONLY transaction is active, set once at translation
+    /// time from the connection.
+    tx_read_only: bool,
     // TODO: when we support multiple dbs, this should be a write mask to track which DBs need to be written
     txn_mode: TransactionMode,
     /// Set of database IDs that need write transactions (for attached databases).
@@ -793,6 +796,7 @@ impl ProgramBuilder {
             start_offset: BranchOffset::Placeholder,
             capture_data_changes_info,
             mvcc_enabled,
+            tx_read_only: false,
             txn_mode: TransactionMode::None,
             write_databases: BitSet::default(),
             read_databases: BitSet::default(),
@@ -1041,6 +1045,14 @@ impl ProgramBuilder {
 
     pub fn set_mvcc_enabled(&mut self, enabled: bool) {
         self.mvcc_enabled = enabled;
+    }
+
+    pub const fn is_tx_read_only(&self) -> bool {
+        self.tx_read_only
+    }
+
+    pub fn set_tx_read_only(&mut self, read_only: bool) {
+        self.tx_read_only = read_only;
     }
 
     /// Whether this program has already emitted a call to a trigger or FK action

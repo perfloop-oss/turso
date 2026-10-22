@@ -197,6 +197,10 @@ pub(super) fn translate_sequence_function(
 ) -> Result<usize> {
     let is_nextval = matches!(&func_ctx.func, Func::Scalar(ScalarFunc::NextVal));
 
+    if program.is_tx_read_only() {
+        return Err(LimboError::ReadOnly);
+    }
+
     let seq_name_raw = extract_string_literal(&args[0])?;
     let (namespace, normalized_name) = if let Some((schema, name)) = seq_name_raw.split_once('.') {
         let schema_norm = normalize_ident(schema);

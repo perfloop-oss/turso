@@ -108,6 +108,7 @@ pub fn translate(
         ProgramBuilderOpts::new(1, 32, 2),
     ));
     program.set_mvcc_enabled(connection.mvcc_enabled());
+    program.set_tx_read_only(connection.is_tx_read_only());
     program.flags.set_keep_array_results_as_blobs(matches!(
         origin,
         crate::statement::StatementOrigin::InternalHelper
@@ -220,6 +221,10 @@ pub fn translate_inner(
         bail_parse_error!("Cannot execute write statement in query_only mode")
     }
 
+    if is_write && connection.is_tx_read_only() {
+        return Err(crate::LimboError::ReadOnly);
+    }
+
     let is_select = matches!(stmt, ast::Stmt::Select { .. });
     let is_dml = matches!(
         stmt,
@@ -258,7 +263,11 @@ pub fn translate_inner(
                 connection.clone(),
             )?;
         }
-        ast::Stmt::Begin { typ, name } => translate_tx_begin(typ, name, resolver, program)?,
+        ast::Stmt::Begin {
+            typ,
+            name,
+            access_mode,
+        } => translate_tx_begin(typ, name, access_mode, resolver, program)?,
         ast::Stmt::Commit { name } => {
             translate_tx_commit(name, resolver.schema(), resolver, program)?
         }
