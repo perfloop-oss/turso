@@ -1,3 +1,4 @@
+use crate::error::sqlstate_error;
 use crate::functions::validate_pg_input;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fmt::Debug;
@@ -13,6 +14,7 @@ use turso_core::{
 use turso_ext::{ConstraintInfo, IndexInfo, OrderByInfo, ResultCode, VTabKind};
 use turso_parser::ast::RefAct;
 use turso_pg_parser::quote_identifier;
+use turso_pg_parser::sqlstate::SQLSTATE_WRONG_OBJECT_TYPE;
 
 pub use turso_pg_parser::translator::{is_catalog_table_name, is_catalog_view_name};
 
@@ -209,6 +211,13 @@ impl Dialect for PostgresDialect {
 
     fn add_column_computes_default_for_existing_rows(&self) -> bool {
         true
+    }
+
+    fn check_star_call_of_plain_function(&self, name: &str) -> Result<()> {
+        Err(sqlstate_error(
+            SQLSTATE_WRONG_OBJECT_TYPE,
+            format!("{name}(*) specified, but {name} is not an aggregate function"),
+        ))
     }
 }
 
