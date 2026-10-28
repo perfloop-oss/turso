@@ -33,6 +33,7 @@ pub(crate) mod pragma;
 pub(crate) mod recursive_cte;
 pub(crate) mod result_column_types;
 pub(crate) mod result_row;
+pub(crate) mod roles;
 pub(crate) mod rollback;
 pub(crate) mod schema;
 pub(crate) mod select;
@@ -194,6 +195,7 @@ pub fn translate_inner(
             | ast::Stmt::CreateVirtualTable(..)
             | ast::Stmt::CreateType { .. }
             | ast::Stmt::CreateDomain { .. }
+            | ast::Stmt::CreateRole { .. }
             | ast::Stmt::Delete { .. }
             | ast::Stmt::DropIndex { .. }
             | ast::Stmt::DropTable { .. }
@@ -381,6 +383,9 @@ pub fn translate_inner(
             if_exists,
             view_name,
         } => view::translate_drop_view(resolver, &view_name, if_exists, program)?,
+        ast::Stmt::CreateRole { role_name } => {
+            roles::translate_create_role(&role_name, resolver, program)?
+        }
         ast::Stmt::CreateType {
             if_not_exists,
             type_name,
@@ -576,6 +581,7 @@ fn stmt_kind(stmt: &ast::Stmt) -> &'static str {
         ast::Stmt::CreateVirtualTable(_) => "create_virtual_table",
         ast::Stmt::CreateType { .. } => "create_type",
         ast::Stmt::CreateDomain { .. } => "create_domain",
+        ast::Stmt::CreateRole { .. } => "create_role",
         ast::Stmt::Delete { .. } => "delete",
         ast::Stmt::Detach { .. } => "detach",
         ast::Stmt::DropIndex { .. } => "drop_index",

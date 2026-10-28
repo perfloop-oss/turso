@@ -4,6 +4,7 @@ use crate::error::io_error;
 #[cfg(any(test, injected_yields))]
 use crate::mvcc::yield_points::{FailureInjector, YieldInjector};
 use crate::namespace::{NamespaceId, NamespaceRef, Qualifier, Qualifiers};
+use crate::security::roles::{RoleCatalog, ROLES_TABLE_NAME, SELECT_ROLES_SQL};
 use crate::state_machine::StateMachine;
 use crate::statement::StatementOrigin;
 use crate::storage::{checksum::CHECKSUM_REQUIRED_RESERVED_BYTES, pager::SavepointResult};
@@ -261,6 +262,11 @@ enum ReparsePhase {
     LoadTypes {
         stmt: Box<Statement>,
         type_rows: Vec<String>,
+    },
+    /// Loading roles from the roles table into the role catalog.
+    LoadRoles {
+        stmt: Box<Statement>,
+        rows: Vec<Vec<Value>>,
     },
     /// Best-effort ANALYZE-stats refresh before finalizing.
     RefreshStats {
@@ -1664,9 +1670,7 @@ impl Connection {
                             type_rows: Vec::new(),
                         };
                     } else {
-                        inner.phase = ReparsePhase::RefreshStats {
-                            stats: Default::default(),
-                        };
+                        inner.phase = self.load_roles_phase(&inner.fresh)?;
                     }
                 }
                 ReparsePhase::LoadTypes { stmt, type_rows } => {
@@ -1676,6 +1680,18 @@ impl Connection {
                     }));
                     let type_rows = std::mem::take(type_rows);
                     inner.fresh.load_type_definitions(&type_rows)?;
+                    inner.phase = self.load_roles_phase(&inner.fresh)?;
+                }
+                ReparsePhase::LoadRoles { stmt, rows } => {
+                    crate::return_if_io!(stmt.run_with_row_callback_nonblock(|row| {
+                        turso_assert!(
+                            !matches!(self.get_tx_state(), TransactionState::None),
+                            "roles must be read in a transaction"
+                        );
+                        rows.push(row.get_values().cloned().collect());
+                        Ok(())
+                    }));
+                    inner.fresh.roles = Arc::new(inner.fresh.roles.with_stored_roles(rows)?);
                     inner.phase = ReparsePhase::RefreshStats {
                         stats: Default::default(),
                     };
@@ -1702,6 +1718,27 @@ impl Connection {
                 }
             }
         }
+    }
+
+    /// Returns the phase that loads the roles table into `fresh`, or the
+    /// stats refresh phase if the database has no roles table. The fresh
+    /// schema is installed first, because the current schema may not contain
+    /// the roles table yet.
+    fn load_roles_phase(self: &Arc<Connection>, fresh: &Schema) -> Result<ReparsePhase> {
+        if !fresh.has_table(NamespaceId::ROOT, ROLES_TABLE_NAME) {
+            return Ok(ReparsePhase::RefreshStats {
+                stats: Default::default(),
+            });
+        }
+        self.with_schema_mut(|schema| {
+            *schema = fresh.try_clone()?;
+            Ok::<_, crate::alloc::TryReserveError>(())
+        })??;
+        let stmt = self.prepare(SELECT_ROLES_SQL)?;
+        Ok(ReparsePhase::LoadRoles {
+            stmt: Box::new(stmt),
+            rows: Vec::new(),
+        })
     }
 
     pub(crate) fn read_current_schema_cookie(&self) -> Result<u32> {
@@ -3488,6 +3525,14 @@ impl Connection {
     pub fn search_order(&self) -> Vec<Qualifier> {
         self.current_qualifiers()
             .search_order(self.search_path.read().as_deref())
+    }
+
+    /// Returns the roles of the main database as seen by this connection.
+    /// Outside a transaction, this includes roles that other connections
+    /// committed.
+    pub fn role_catalog(&self) -> Arc<RoleCatalog> {
+        self.maybe_update_schema();
+        self.with_schema(MAIN_DB_ID, |schema| schema.roles.clone())
     }
 
     /// Access schema for a database using a closure pattern to avoid cloning
