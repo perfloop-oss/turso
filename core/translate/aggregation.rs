@@ -17,7 +17,7 @@ use super::{
     emitter::{OperationMode, Resolver, TranslateCtx},
     expr::{
         resolve_expr, translate_condition_expr, translate_expr, translate_expr_no_constant_opt,
-        ConditionMetadata, NoConstantOptReason,
+        walk_expr, ConditionMetadata, NoConstantOptReason, WalkControl,
     },
     plan::{
         Aggregate, Distinctness, EvalAt, NonFromClauseSubquery, SelectPlan, SubqueryEvalPhase,
@@ -57,6 +57,11 @@ pub fn emit_ungrouped_aggregation<'a>(
             agg_start_reg + i,
             false,
         );
+    }
+    for (expr, reg) in t_ctx.ungrouped_column_regs.iter() {
+        t_ctx
+            .resolver
+            .cache_expr_reg(std::borrow::Cow::Owned(expr.clone()), *reg, false);
     }
     t_ctx.resolver.enable_expr_to_reg_cache();
 
@@ -215,6 +220,68 @@ pub fn emit_ungrouped_aggregation<'a>(
     program.preassign_label_to_next_insn(end_label);
 
     Ok(())
+}
+
+/// Collects the table columns that a result column containing aggregates
+/// (e.g. CASE WHEN SUM(1) THEN a ELSE b END) or a HAVING term (e.g. HAVING a > 0)
+/// reads outside an aggregate function, and gives each a register set to NULL.
+/// The main loop copies the column values into these registers while the cursor
+/// is still valid, so that the expressions evaluated after AggFinal read them
+/// instead of the exhausted cursor. The registers are set to NULL here, before
+/// the loop, so that they read NULL if no row reaches the aggregate, also when
+/// a subquery runs again.
+/// Columns of an outer query are not collected: the outer cursor does not move
+/// while this loop runs, and a value read in the loop would be stale for an
+/// outer row where this loop finds no rows.
+pub fn init_ungrouped_column_regs(
+    program: &mut ProgramBuilder,
+    plan: &SelectPlan,
+) -> Result<Vec<(ast::Expr, usize)>> {
+    let having = plan
+        .group_by
+        .as_ref()
+        .and_then(|group_by| group_by.having.as_deref())
+        .unwrap_or_default();
+    let mut columns = Vec::new();
+    for expr in plan
+        .result_columns
+        .iter()
+        .filter(|rc| rc.contains_aggregates)
+        .map(|rc| &rc.expr)
+        .chain(having)
+    {
+        walk_expr(expr, &mut |expr: &ast::Expr| -> Result<WalkControl> {
+            match expr {
+                ast::Expr::Column { table, .. } | ast::Expr::RowId { table, .. }
+                    if plan
+                        .table_references
+                        .find_joined_table_by_internal_id(*table)
+                        .is_none() =>
+                {
+                    Ok(WalkControl::SkipChildren)
+                }
+                ast::Expr::Column { .. } | ast::Expr::RowId { .. } => {
+                    columns.push(expr.clone());
+                    Ok(WalkControl::SkipChildren)
+                }
+                _ => {
+                    if plan.aggregates.iter().any(|a| a.original_expr == *expr) {
+                        return Ok(WalkControl::SkipChildren);
+                    }
+                    Ok(WalkControl::Continue)
+                }
+            }
+        })?;
+    }
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let start_reg = program.alloc_registers_and_init_w_null(columns.len());
+    Ok(columns
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| (expr, start_reg + i))
+        .collect())
 }
 
 /// Emits the bytecode for handling duplicates in a distinct aggregate.
