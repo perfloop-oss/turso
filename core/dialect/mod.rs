@@ -246,6 +246,15 @@ pub trait Dialect: Send + Sync + 'static {
     fn add_column_computes_default_for_existing_rows(&self) -> bool {
         false
     }
+
+    /// Whether a cast of an integer to the built-in `boolean` type gives
+    /// true for every nonzero integer.
+    ///
+    /// PostgreSQL's integer-to-boolean cast does. Otherwise the cast uses the
+    /// type's ENCODE, which accepts only 0 and 1.
+    fn casts_nonzero_integer_to_true(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

@@ -221,6 +221,10 @@ impl Dialect for PostgresDialect {
     fn add_column_computes_default_for_existing_rows(&self) -> bool {
         true
     }
+
+    fn casts_nonzero_integer_to_true(&self) -> bool {
+        true
+    }
 }
 
 pub fn encode_pg_schema_sql(sql: &str) -> String {
