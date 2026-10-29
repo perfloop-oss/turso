@@ -1168,7 +1168,8 @@ mod tests {
                 "coalesce(CAST(1 AS cents), 1)",
                 builtin(BuiltinType::Integer),
             ),
-            // Except that numeric computes with integers and decimals.
+            // Except that a number mixed with numeric is a numeric, so the
+            // values compare in numeric order.
             (
                 "coalesce(CAST(1 AS numeric(10, 2)), 0)",
                 custom("numeric", &[]),
@@ -1179,7 +1180,7 @@ mod tests {
             ),
             (
                 "coalesce(CAST(1 AS numeric(10, 2)), CAST(0.5 AS REAL))",
-                builtin(BuiltinType::Any),
+                custom("numeric", &[]),
             ),
             // Two different custom types have their common stored type.
             (
