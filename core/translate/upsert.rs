@@ -45,7 +45,7 @@ use crate::{
     util::{exprs_are_equivalent, normalize_ident},
     vdbe::{
         affinity::Affinity,
-        builder::{DmlColumnContext, ProgramBuilder},
+        builder::{DmlColumnContext, DmlRowForm, ProgramBuilder},
         insn::{IdxInsertFlags, InsertFlags, Insn},
     },
 };
@@ -781,6 +781,7 @@ pub fn emit_upsert(
         new_start,
         new_rowid_reg.unwrap_or(ctx.conflict_rowid_reg),
         &layout,
+        DmlRowForm::UserFacing,
         resolver,
     )?;
 
@@ -970,6 +971,7 @@ pub fn emit_upsert(
                 new_start,
                 new_rowid_reg.unwrap_or(ctx.conflict_rowid_reg),
                 &layout,
+                DmlRowForm::Stored,
                 resolver,
             )?;
 
@@ -1656,6 +1658,7 @@ pub fn emit_upsert(
             new_start,
             new_rowid_reg.unwrap_or(ctx.conflict_rowid_reg),
             &layout,
+            DmlRowForm::Stored,
             resolver,
         )?;
     }
@@ -1686,13 +1689,19 @@ fn compute_new_row_virtual_columns(
     new_start: usize,
     rowid_reg: usize,
     layout: &ColumnLayout,
+    form: DmlRowForm,
     resolver: &Resolver,
 ) -> crate::Result<()> {
     if !ctx.table.has_virtual_columns {
         return Ok(());
     }
-    let dml_ctx =
-        DmlColumnContext::layout(ctx.table.columns(), new_start, rowid_reg, layout.clone());
+    let dml_ctx = DmlColumnContext::layout(
+        ctx.table.columns(),
+        new_start,
+        rowid_reg,
+        layout.clone(),
+        form,
+    );
     compute_virtual_columns(
         program,
         &ctx.table.columns_topo_sort()?,
@@ -1771,7 +1780,7 @@ fn eval_partial_pred_for_row_image(
     let columns = table.columns();
     let bt = table.require_btree()?;
 
-    let mut column_regs: Vec<usize> = columns
+    let column_regs: Vec<usize> = columns
         .iter()
         .enumerate()
         .map(|(i, col)| {
@@ -1789,7 +1798,7 @@ fn eval_partial_pred_for_row_image(
         resolver,
         expr,
         columns,
-        &mut column_regs,
+        &column_regs,
         &bt,
         r,
     )?;
@@ -1812,7 +1821,7 @@ fn emit_upsert_expr_index_value(
     let columns = table.columns();
     let bt = table.require_btree()?;
 
-    let mut column_regs: Vec<usize> = columns
+    let column_regs: Vec<usize> = columns
         .iter()
         .enumerate()
         .map(|(i, col)| {
@@ -1828,7 +1837,7 @@ fn emit_upsert_expr_index_value(
         resolver,
         expr,
         columns,
-        &mut column_regs,
+        &column_regs,
         &bt,
         dest_reg,
     )?;
