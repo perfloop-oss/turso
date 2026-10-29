@@ -26,7 +26,9 @@ use crate::translate::{
 use crate::type_ordering::TypeOrdering;
 use crate::vdbe::builder::{CursorKey, ProgramBuilderOpts, SelfTableContext};
 use crate::vdbe::insn::{to_u32, ClearBtreeCount, CmpInsFlags, Cookie};
-use crate::{bail_parse_error, CaptureDataChangesExt, LimboError, MAIN_DB_ID, TEMP_DB_ID};
+use crate::{
+    bail_parse_error, CaptureDataChangesExt, LimboError, SymbolTable, MAIN_DB_ID, TEMP_DB_ID,
+};
 use crate::{
     schema::{
         is_deterministic_schema_function_call, BTreeTable, Index, IndexColumn, PseudoCursorType,
@@ -202,7 +204,13 @@ pub fn translate_create_index(
         bail_parse_error!("CREATE INDEX on WITHOUT ROWID tables is not supported");
     }
     let columns = resolver.with_schema(database_id, |schema| {
-        resolve_sorted_columns_with_catalog(&tbl, &columns, Some(&resolver.catalog), schema)
+        resolve_sorted_columns_with_catalog(
+            &tbl,
+            &columns,
+            Some(&resolver.catalog),
+            schema,
+            resolver.catalog.symbol_table,
+        )
     })?;
 
     // Block CREATE INDEX on STRUCT/UNION columns
@@ -996,8 +1004,9 @@ pub fn resolve_sorted_columns(
     table: &BTreeTable,
     cols: &[SortedColumn],
     schema: &Schema,
+    syms: &SymbolTable,
 ) -> crate::Result<crate::alloc::Vec<IndexColumn>> {
-    resolve_sorted_columns_with_catalog(table, cols, None, schema)
+    resolve_sorted_columns_with_catalog(table, cols, None, schema, syms)
 }
 
 pub fn reject_explicit_nulls(cols: &[SortedColumn]) -> crate::Result<()> {
@@ -1017,6 +1026,7 @@ fn resolve_sorted_columns_with_catalog(
     cols: &[SortedColumn],
     resolver: Option<&CatalogContext>,
     schema: &Schema,
+    syms: &SymbolTable,
 ) -> crate::Result<crate::alloc::Vec<IndexColumn>> {
     let mut resolved =
         <crate::alloc::Vec<_> as crate::alloc::TursoTryWithCapacityExt>::try_with_capacity_ext(
@@ -1052,7 +1062,7 @@ fn resolve_sorted_columns_with_catalog(
         if !validate_index_expression(unwrapped_expr, table) {
             crate::bail_parse_error!("Error: invalid expression in CREATE INDEX: {}", sc.expr);
         }
-        let ordering = expression_type_ordering(unwrapped_expr, table, schema)?;
+        let ordering = expression_type_ordering(unwrapped_expr, table, schema, syms)?;
         let collation = index_collation(explicit_collation, ordering)?;
         resolved
             .push_within_capacity(IndexColumn {
@@ -1091,10 +1101,11 @@ pub(crate) fn expression_type_ordering(
     expr: &Expr,
     table: &BTreeTable,
     schema: &Schema,
+    syms: &SymbolTable,
 ) -> crate::Result<Option<TypeOrdering>> {
     let mut expr = expr.clone();
     crate::schema::resolve_gencol_expr_columns(&mut expr, table.columns())?;
-    let ty = type_of(&expr, &TypeEnv::over_table(table, schema));
+    let ty = type_of(&expr, &TypeEnv::over_table(table, schema, syms));
     Ok(type_ordering(&ty, schema))
 }
 

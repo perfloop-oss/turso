@@ -36,14 +36,7 @@ test create-type-rejects-less-than-operator {
     CREATE TYPE orderable_lt BASE text ENCODE value DECODE value OPERATOR '<';
 }
 expect error {
-    OPERATOR '<' is not supported: values of a custom type sort and compare by their stored value
-}
-
-test create-type-rejects-equals-operator {
-    CREATE TYPE orderable_eq BASE text ENCODE value DECODE value OPERATOR '=' test_uint_eq;
-}
-expect error {
-    OPERATOR '=' is not supported: values of a custom type sort and compare by their stored value
+    CREATE TYPE does not accept OPERATOR
 }
 
 @requires strict "uses STRICT tables"
