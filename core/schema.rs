@@ -116,6 +116,7 @@ use crate::storage::btree::{BTreeCursor, CursorTrait};
 use crate::sync::Arc;
 use crate::sync::Mutex;
 use crate::translate::collate::{CollationSeq, TextCollation};
+use crate::translate::expr::expr_type::ExprType;
 use crate::translate::plan::{BitSet, ColumnMask, Plan, TableReferences};
 use crate::util::{
     column_declared_type, is_rowid_alias_type, module_args_from_sql, module_name_from_sql,
@@ -4306,6 +4307,7 @@ impl TryClone for RecursiveCteInput {
         Ok(Self {
             name: self.name.clone(),
             columns: self.columns.try_clone()?,
+            column_types: self.column_types.clone(),
         })
     }
 }
@@ -5839,6 +5841,9 @@ impl ParenthesizedJoinColumnSource {
 pub struct RecursiveCteInput {
     pub name: String,
     pub columns: Vec<Column>,
+    /// The type of each column: the type the CTE's first SELECT gives it, as in
+    /// PostgreSQL.
+    pub(crate) column_types: Vec<ExprType>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -7511,6 +7516,12 @@ impl Column {
             self.override_affinity(Affinity::affinity(&resolved.primitive));
             self.type_ordering = resolved.ordering();
         }
+    }
+    /// Set the key order of a derived table's column, which takes it from the
+    /// type of the expression the column comes from.
+    #[inline]
+    pub fn set_type_ordering(&mut self, ordering: Option<TypeOrdering>) {
+        self.type_ordering = ordering;
     }
     #[inline]
     pub fn has_explicit_collation(&self) -> bool {
