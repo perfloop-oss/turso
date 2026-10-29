@@ -1228,6 +1228,9 @@ pub fn translate_alter_table(
 
                 default_type_mismatch = btree.is_strict && strict_default_type_mismatch(&column)?;
             }
+            if btree.is_strict {
+                column.resolve_custom_type(resolver.schema());
+            }
 
             // If a column has no explicit DEFAULT but its custom type defines
             // one, propagate the type-level DEFAULT to the column so that
