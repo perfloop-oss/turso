@@ -194,8 +194,8 @@ pub(super) struct ResolvedOperator {
 ///    `date + int_col` and `date + ?` add days, and `numeric_col = 1.5 + 0`
 ///    compare as numeric, while `int_col = '10'` still uses the standard operator.
 ///
-/// When case 2 applies, the literal is encoded before being passed to the operator
-/// function so both arguments are in the same (encoded) representation. In case 3
+/// When case 2 applies to an arithmetic operator, the literal is encoded before
+/// being passed to the operator function. A comparison passes it as is. In case 3
 /// the other operand is passed as is. For arithmetic that is only safe when encoded
 /// and decoded values look the same. For a comparison the column is passed decoded,
 /// so both arguments are values as the user sees them, and the value is not rounded
@@ -279,7 +279,7 @@ pub(super) fn find_custom_type_operator(
                 func_name,
                 swap_args,
                 negate,
-                encode_info: encode_other.then(|| OperatorEncodeInfo {
+                encode_info: (encode_other && !op.is_comparison()).then(|| OperatorEncodeInfo {
                     type_def: info.type_def.clone(),
                     type_params: info.params.clone(),
                     which,

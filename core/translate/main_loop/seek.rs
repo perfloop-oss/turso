@@ -1,4 +1,5 @@
 use super::*;
+use crate::function::FuncCtx;
 use crate::translate::plan::BitSet;
 use crate::vdbe::insn::NullMatchingMask;
 use turso_parser::ast::NullsOrder;
@@ -18,6 +19,7 @@ fn index_seek_affinities(seek_def: &SeekDef, seek_key: &SeekKey) -> String {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encode_seek_keys_for_custom_types(
     program: &mut ProgramBuilder,
     tables: &TableReferences,
@@ -25,6 +27,7 @@ fn encode_seek_keys_for_custom_types(
     start_reg: usize,
     num_keys: usize,
     idx_col_offset: usize,
+    loop_end: BranchOffset,
     resolver: &Resolver<'_>,
 ) -> crate::Result<()> {
     let table = tables
@@ -62,6 +65,29 @@ fn encode_seek_keys_for_custom_types(
             reg,
             target_pc: skip_label,
         });
+        // ENCODE and COERCE can change the key, for example `numeric(10,2)`
+        // rounds 1.501 to 1.50. When the type has its own `=` and it says the
+        // stored key no longer equals the key as written, no row can match.
+        let eq_check = match resolver
+            .schema()
+            .get_type_def(&table_col.ty_str, table.is_strict())
+            .and_then(|td| td.operators().iter().find(|o| o.op == "="))
+            .and_then(|o| o.func_name.as_deref())
+        {
+            Some(name) => {
+                let func = resolver.resolve_function(name, 2)?.ok_or_else(|| {
+                    crate::LimboError::InternalError(format!("function not found: {name}"))
+                })?;
+                let unencoded_reg = program.alloc_register();
+                program.emit_insn(Insn::Copy {
+                    src_reg: reg,
+                    dst_reg: unencoded_reg,
+                    extra_amount: 0,
+                });
+                Some((func, unencoded_reg))
+            }
+            None => None,
+        };
         crate::translate::expr::emit_store_value(
             program,
             &resolved.chain,
@@ -69,6 +95,38 @@ fn encode_seek_keys_for_custom_types(
             &table_col.ty_params,
             resolver,
         )?;
+        if let Some((func, unencoded_reg)) = eq_check {
+            let args = program.alloc_registers(2);
+            crate::translate::expr::emit_user_facing_column_value(
+                program,
+                reg,
+                args,
+                table_col,
+                table.is_strict(),
+                resolver,
+            )?;
+            program.emit_insn(Insn::Copy {
+                src_reg: unencoded_reg,
+                dst_reg: args + 1,
+                extra_amount: 0,
+            });
+            let is_equal_reg = program.alloc_register();
+            program.emit_insn(Insn::Function {
+                constant_mask: 0,
+                start_reg: args,
+                dest: is_equal_reg,
+                func: FuncCtx {
+                    func,
+                    arg_count: 2,
+                    collation: CollationSeq::Binary,
+                },
+            });
+            program.emit_insn(Insn::IfNot {
+                reg: is_equal_reg,
+                target_pc: loop_end,
+                jump_if_null: true,
+            });
+        }
         program.preassign_label_to_next_insn(skip_label);
     }
     Ok(())
@@ -215,6 +273,7 @@ impl<'a, 'plan> SeekEmitter<'a, 'plan> {
                 self.start_reg,
                 num_regs,
                 0,
+                self.loop_end,
                 &self.t_ctx.resolver,
             )?;
             let affinities = index_seek_affinities(self.seek_def, &self.seek_def.start);
@@ -342,6 +401,7 @@ impl<'a, 'plan> SeekEmitter<'a, 'plan> {
                         last_reg,
                         1,
                         self.seek_def.prefix.len(),
+                        self.loop_end,
                         &self.t_ctx.resolver,
                     )?;
                     let affinities = index_seek_affinities(self.seek_def, &self.seek_def.end);

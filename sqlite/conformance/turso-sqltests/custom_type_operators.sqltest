@@ -434,6 +434,68 @@ expect {
 }
 
 @requires strict "uses STRICT tables"
+test op-numeric-compare-literal-not-rounded {
+    -- The literal is compared as written, not rounded to the column's scale.
+    CREATE TABLE t1(id INTEGER PRIMARY KEY, val numeric(10,2)) STRICT;
+    INSERT INTO t1 VALUES (1, 1.5);
+    INSERT INTO t1 VALUES (2, 2);
+    SELECT 'eq', count(*) FROM t1 WHERE val = 1.501;
+    SELECT 'lt', count(*) FROM t1 WHERE val < 1.501;
+    SELECT 'ge', count(*) FROM t1 WHERE val >= 1.501;
+    SELECT 'out-of-range', count(*) FROM t1 WHERE val = 123456789012.5;
+}
+expect {
+    eq|0
+    lt|1
+    ge|1
+    out-of-range|0
+}
+
+@requires strict "uses STRICT tables"
+test op-numeric-index-seek-literal-not-rounded {
+    -- The seek key is rounded to the column's scale to find the stored value,
+    -- but a key that rounding changed matches no row.
+    CREATE TABLE t1(id INTEGER PRIMARY KEY, val numeric(10,2), other numeric(10,3)) STRICT;
+    CREATE INDEX t1_val ON t1(val);
+    INSERT INTO t1 VALUES (1, 1.5, 1.501);
+    INSERT INTO t1 VALUES (2, 2, 2);
+    SELECT 'eq-1.501', count(*) FROM t1 WHERE val = 1.501;
+    SELECT 'eq-1.5', count(*) FROM t1 WHERE val = 1.5;
+    SELECT 'eq-1.50', count(*) FROM t1 WHERE val = '1.50';
+    SELECT 'join', a.id, b.id FROM t1 AS a JOIN t1 AS b ON a.val = b.other;
+}
+expect {
+    eq-1.501|0
+    eq-1.5|1
+    eq-1.50|1
+    join|2|2
+}
+
+@requires strict "uses STRICT tables"
+test op-compare-literal-accepted-by-encode {
+    -- A comparison passes the literal as written, so the operator function
+    -- accepts every value ENCODE accepts, such as 10.0 for test_uint.
+    CREATE TYPE test_uint(value any) BASE text
+        ENCODE test_uint_encode(value)
+        DECODE test_uint_decode(value)
+        OPERATOR '<' test_uint_lt
+        OPERATOR '=' test_uint_eq;
+    CREATE TABLE t1(id INTEGER PRIMARY KEY, a test_uint) STRICT;
+    INSERT INTO t1 VALUES (1, 10);
+    SELECT 'eq', count(*) FROM t1 WHERE a = 10.0;
+    SELECT 'lt', count(*) FROM t1 WHERE a < 11.0;
+    SELECT 'expr', count(*) FROM t1 WHERE a = 10.0 + 0;
+    CREATE INDEX t1_a ON t1(a);
+    SELECT 'index-eq', count(*) FROM t1 WHERE a = 10.0;
+}
+expect {
+    eq|1
+    lt|1
+    expr|1
+    index-eq|1
+}
+
+@requires strict "uses STRICT tables"
 test op-numeric-add-both-columns {
     -- Both columns are numeric → operator fires, no encoding needed.
     CREATE TABLE t1(id INTEGER PRIMARY KEY, a numeric(10,2), b numeric(10,2)) STRICT;

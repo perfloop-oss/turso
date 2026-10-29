@@ -19753,6 +19753,15 @@ fn parse_test_uint(reg: &Register) -> Result<Option<u64>> {
                 Ok(Some(*i as u64))
             }
         }
+        Value::Numeric(Numeric::Float(f)) => {
+            if *f < 0.0 || f.fract() != 0.0 {
+                Err(LimboError::InternalError(
+                    "test_uint: not a non-negative integer".to_string(),
+                ))
+            } else {
+                Ok(Some(f64::from(*f) as u64))
+            }
+        }
         Value::Text(t) => {
             let s = t.to_string();
             let v = s
